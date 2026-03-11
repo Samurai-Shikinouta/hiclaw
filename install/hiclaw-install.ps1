@@ -23,8 +23,9 @@
 #   HICLAW_WORKSPACE_DIR      Host directory for manager workspace (default: ~/hiclaw-manager)
 #   HICLAW_VERSION            Image tag          (default: latest)
 #   HICLAW_REGISTRY           Image registry     (default: auto-detected by timezone)
-#   HICLAW_INSTALL_MANAGER_IMAGE  Override manager image (e.g., local build)
-#   HICLAW_INSTALL_WORKER_IMAGE   Override worker image  (e.g., local build)
+#   HICLAW_INSTALL_MANAGER_IMAGE       Override manager image (e.g., local build)
+#   HICLAW_INSTALL_WORKER_IMAGE        Override worker image  (e.g., local build)
+#   HICLAW_INSTALL_COPAW_WORKER_IMAGE  Override copaw worker image (e.g., local build)
 #   HICLAW_PORT_GATEWAY       Host port for Higress gateway (default: 18080)
 #   HICLAW_PORT_CONSOLE       Host port for Higress console (default: 18001)
 #   HICLAW_PORT_ELEMENT_WEB   Host port for Element Web direct access (default: 18088)
@@ -59,6 +60,29 @@ $script:HICLAW_VERSION = if ($env:HICLAW_VERSION) { $env:HICLAW_VERSION } else {
 $script:HICLAW_NON_INTERACTIVE = if ($env:HICLAW_NON_INTERACTIVE -eq "1" -or $NonInteractive) { $true } else { $false }
 $script:HICLAW_MOUNT_SOCKET = if ($env:HICLAW_MOUNT_SOCKET -eq "0") { $false } else { $true }
 $script:HICLAW_ENV_FILE = if ($EnvFile) { $EnvFile } elseif ($env:HICLAW_ENV_FILE) { $env:HICLAW_ENV_FILE } else { "$env:USERPROFILE\hiclaw-manager.env" }
+
+# ============================================================
+# Log all output to file
+# ============================================================
+
+$script:HICLAW_LOG_FILE = "$env:USERPROFILE\hiclaw-install.log"
+
+# Start transcript for logging (PowerShell's built-in logging mechanism)
+try {
+    Start-Transcript -Path $script:HICLAW_LOG_FILE -Append -ErrorAction SilentlyContinue
+} catch {
+    # If transcript fails, continue without logging
+}
+
+Write-Host ""
+Write-Host "========================================"
+Write-Host "HiClaw Installation Log"
+Write-Host "Started: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
+Write-Host "User: $env:USERNAME"
+Write-Host "System: $(hostname)"
+Write-Host "Log file: $($script:HICLAW_LOG_FILE)"
+Write-Host "========================================"
+Write-Host ""
 
 # ============================================================
 # Utility Functions
@@ -251,7 +275,7 @@ $script:Messages = @{
     "llm.provider.selected_codingplan" = @{ zh = "  提供商: 阿里云百炼 CodingPlan"; en = "  Provider: Alibaba Cloud Bailian CodingPlan" }
     "llm.provider.selected_qwen" = @{ zh = "  提供商: 阿里云百炼"; en = "  Provider: Alibaba Cloud Bailian" }
     "llm.provider.selected_openai" = @{ zh = "  提供商: {0}（OpenAI 兼容）"; en = "  Provider: {0} (OpenAI-compatible)" }
-    "llm.provider.invalid" = @{ zh = "无效选择，默认使用阿里云百炼 CodingPlan"; en = "Invalid choice, defaulting to Alibaba Cloud Bailian CodingPlan" }
+    "llm.provider.invalid" = @{ zh = "无效选择: {0}（请输入 1 或 2）"; en = "Invalid choice: {0} (please enter 1 or 2)" }
     "llm.qwen.model_prompt" = @{ zh = "默认模型 ID [qwen3.5-plus]"; en = "Default Model ID [qwen3.5-plus]" }
     "llm.openai.base_url_prompt" = @{ zh = "Base URL（例如 https://api.openai.com/v1）"; en = "Base URL (e.g., https://api.openai.com/v1)" }
     "llm.openai.model_prompt" = @{ zh = "默认模型 ID [gpt-5.4]"; en = "Default Model ID [gpt-5.4]" }
@@ -308,13 +332,24 @@ $script:Messages = @{
     "host_share.sharing" = @{ zh = "共享主机目录: {0} -> 容器内 /host-share"; en = "Sharing host directory: {0} -> /host-share in container" }
     "host_share.not_exist" = @{ zh = "警告: 主机目录 {0} 不存在，跳过验证继续使用"; en = "WARNING: Host directory {0} does not exist, using without validation" }
 
+    # --- Default worker runtime ---
+    "worker_runtime.title" = @{ zh = "--- 默认 Worker 运行时 ---"; en = "--- Default Worker Runtime ---" }
+    "worker_runtime.openclaw" = @{ zh = "OpenClaw（Node.js 容器，~500MB 内存）"; en = "OpenClaw (Node.js container, ~500MB RAM)" }
+    "worker_runtime.copaw" = @{ zh = "CoPaw（Python 容器，~150MB 内存，默认关闭控制台，可跟 Manager 对话按需开启）"; en = "CoPaw (Python container, ~150MB RAM, console off by default, enable on demand via Manager)" }
+    "worker_runtime.choice" = @{ zh = "请选择 [1/2]"; en = "Enter choice [1/2]" }
+    "worker_runtime.selected" = @{ zh = "默认 Worker 运行时: {0}"; en = "Default Worker runtime: {0}" }
+
     # --- Secrets and config ---
     "install.generating_secrets" = @{ zh = "正在生成密钥..."; en = "Generating secrets..." }
     "install.config_saved" = @{ zh = "配置已保存到 {0}"; en = "Configuration saved to {0}" }
 
     # --- Container runtime socket ---
     "install.socket_detected" = @{ zh = "容器运行时 socket: {0}（已启用直接创建 Worker）"; en = "Container runtime socket: {0} (direct Worker creation enabled)" }
-    "install.socket_not_found" = @{ zh = "未找到容器运行时 socket（Worker 创建将输出命令）"; en = "No container runtime socket found (Worker creation will output commands)" }
+    "install.socket_not_found" = @{ zh = "未找到容器运行时 socket（Manager 无法直接创建 Worker 容器，需要你手动执行 docker 命令创建）"; en = "No container runtime socket found (Manager cannot create Worker containers directly, you will need to create them manually using docker commands)" }
+    "install.socket_confirm.title" = @{ zh = "⚠️ 未检测到容器运行时 Socket"; en = "⚠️ Container Runtime Socket Not Detected" }
+    "install.socket_confirm.message" = @{ zh = "未找到 Docker/Podman socket，Manager 将无法自动创建 Worker 容器。`n你需要手动执行 docker run 命令来创建 Worker。`n`n是否继续安装？"; en = "Docker/Podman socket not found. Manager will not be able to create Worker containers automatically.`nYou will need to manually run docker commands to create Workers.`n`nContinue installation?" }
+    "install.socket_confirm.prompt" = @{ zh = "继续安装? [y/N]: "; en = "Continue? [y/N]: " }
+    "install.socket_confirm.cancelled" = @{ zh = "安装已取消。如需启用 Worker 自动创建，请确保 Docker/Podman 正在运行，然后重新运行安装脚本。"; en = "Installation cancelled. To enable automatic Worker creation, ensure Docker/Podman is running and re-run the installer." }
 
     # --- Container management ---
     "install.removing_existing" = @{ zh = "正在移除现有 hiclaw-manager 容器..."; en = "Removing existing hiclaw-manager container..." }
@@ -626,8 +661,12 @@ HICLAW_GITHUB_TOKEN=$($Config.GITHUB_TOKEN)
 # Skills Registry (optional, default: https://skills.sh)
 HICLAW_SKILLS_API_URL=$($Config.SKILLS_API_URL)
 
-# Worker image (for direct container creation)
+# Worker images (for direct container creation)
 HICLAW_WORKER_IMAGE=$($Config.WORKER_IMAGE)
+HICLAW_COPAW_WORKER_IMAGE=$($Config.COPAW_WORKER_IMAGE)
+
+# Default Worker runtime (openclaw | copaw)
+HICLAW_DEFAULT_WORKER_RUNTIME=$($Config.DEFAULT_WORKER_RUNTIME)
 
 # Higress WASM plugin image registry (auto-selected by timezone)
 HIGRESS_ADMIN_WASM_PLUGIN_IMAGE_REGISTRY=$($Config.REGISTRY)
@@ -1137,6 +1176,12 @@ function Install-Manager {
         "$($script:HICLAW_REGISTRY)/higress/hiclaw-worker:$($script:HICLAW_VERSION)"
     }
 
+    $script:COPAW_WORKER_IMAGE = if ($env:HICLAW_INSTALL_COPAW_WORKER_IMAGE) {
+        $env:HICLAW_INSTALL_COPAW_WORKER_IMAGE
+    } else {
+        "$($script:HICLAW_REGISTRY)/higress/hiclaw-copaw-worker:$($script:HICLAW_VERSION)"
+    }
+
     Write-Log (Get-Msg "install.registry" -f $script:HICLAW_REGISTRY)
     Write-Log ""
     Write-Log (Get-Msg "install.dir" -f (Get-Location))
@@ -1243,21 +1288,8 @@ function Install-Manager {
                     }
                 }
 
-                # Stop and remove containers
-                if ($runningManager -or (docker ps -a --format "{{.Names}}" 2>$null | Select-String "^hiclaw-manager$")) {
-                    Write-Log (Get-Msg "install.existing.stopping_manager")
-                    docker stop hiclaw-manager *>$null
-                    docker rm hiclaw-manager *>$null
-                }
-
-                if ($existingWorkers) {
-                    Write-Log (Get-Msg "install.existing.stopping_workers")
-                    $existingWorkers | ForEach-Object {
-                        docker stop $_ *>$null
-                        docker rm $_ *>$null
-                        Write-Log (Get-Msg "install.existing.removed" -f $_)
-                    }
-                }
+                # Remember workers to stop later (after config + image pull)
+                $script:UPGRADE_EXISTING_WORKERS = $existingWorkers
                 break
             }
             "^(2|reinstall)$" {
@@ -1405,7 +1437,7 @@ function Install-Manager {
                     Write-Log (Get-Msg "llm.provider.selected_qwen")
                 } else {
                     $config.LLM_PROVIDER = "openai-compat"
-                    $config.OPENAI_BASE_URL = if ($env:HICLAW_OPENAI_BASE_URL) { $env:HICLAW_OPENAI_BASE_URL } else { "https://coding.dashscope.aliyuncs.com/v1" }
+                    $config.OPENAI_BASE_URL = "https://coding.dashscope.aliyuncs.com/v1"
 
                     # Sub-menu: Select CodingPlan model
                     Write-Host ""
@@ -1473,52 +1505,7 @@ function Install-Manager {
                 Test-LlmConnectivity -BaseUrl $config.OPENAI_BASE_URL -ApiKey $config.LLM_API_KEY -Model $config.DEFAULT_MODEL
             }
             default {
-                Write-Log (Get-Msg "llm.provider.invalid")
-                $config.LLM_PROVIDER = "openai-compat"
-                $config.OPENAI_BASE_URL = if ($env:HICLAW_OPENAI_BASE_URL) { $env:HICLAW_OPENAI_BASE_URL } else { "https://coding.dashscope.aliyuncs.com/v1" }
-
-                # Sub-menu: Select CodingPlan model
-                Write-Host ""
-                Write-Host (Get-Msg "llm.codingplan.models_title")
-                Write-Host (Get-Msg "llm.codingplan.model.qwen35plus")
-                Write-Host (Get-Msg "llm.codingplan.model.glm5")
-                Write-Host (Get-Msg "llm.codingplan.model.kimi")
-                Write-Host (Get-Msg "llm.codingplan.model.minimax")
-                Write-Host ""
-
-                if ($script:HICLAW_QUICKSTART) {
-                    $codingPlanModelChoice = Read-Host "$(Get-Msg 'llm.codingplan.model.select') [1]"
-                } else {
-                    $codingPlanModelChoice = Read-Host (Get-Msg "llm.codingplan.model.select")
-                }
-                $codingPlanModelChoice = if ($codingPlanModelChoice) { $codingPlanModelChoice } else { "1" }
-
-                switch -Regex ($codingPlanModelChoice) {
-                    "^(1|qwen3\.5-plus)$" {
-                        $config.DEFAULT_MODEL = "qwen3.5-plus"
-                    }
-                    "^(2|glm-5)$" {
-                        $config.DEFAULT_MODEL = "glm-5"
-                    }
-                    "^(3|kimi-k2\.5)$" {
-                        $config.DEFAULT_MODEL = "kimi-k2.5"
-                    }
-                    "^(4|MiniMax-M2\.5)$" {
-                        $config.DEFAULT_MODEL = "MiniMax-M2.5"
-                    }
-                    default {
-                        $config.DEFAULT_MODEL = "qwen3.5-plus"
-                    }
-                }
-
-                Write-Log (Get-Msg "llm.provider.selected_codingplan")
-                Write-Log (Get-Msg "llm.model.label" -f $config.DEFAULT_MODEL)
-                Write-Log ""
-                Write-Log (Get-Msg "llm.apikey_hint")
-                Write-Log (Get-Msg "llm.apikey_url")
-                Write-Log ""
-                $config.LLM_API_KEY = Read-Prompt -VarName "HICLAW_LLM_API_KEY" -PromptText (Get-Msg "llm.apikey_prompt") -Secret
-                Test-LlmConnectivity -BaseUrl $config.OPENAI_BASE_URL -ApiKey $config.LLM_API_KEY -Model $config.DEFAULT_MODEL -Hint (Get-Msg "llm.openai.test.fail.codingplan")
+                Write-Error (Get-Msg "llm.provider.invalid" -f $providerChoice)
             }
         }
     }
@@ -1638,6 +1625,31 @@ function Install-Manager {
     }
     Write-Log (Get-Msg "workspace.dir_label" -f $config.WORKSPACE_DIR)
 
+    # Default Worker Runtime
+    Write-Log (Get-Msg "worker_runtime.title")
+    Write-Host ""
+    Write-Host "  1) $(Get-Msg 'worker_runtime.openclaw')"
+    Write-Host "  2) $(Get-Msg 'worker_runtime.copaw')"
+    Write-Host ""
+    if ($script:HICLAW_NON_INTERACTIVE) {
+        $config.DEFAULT_WORKER_RUNTIME = if ($env:HICLAW_DEFAULT_WORKER_RUNTIME) { $env:HICLAW_DEFAULT_WORKER_RUNTIME } else { "openclaw" }
+    } elseif ($script:HICLAW_UPGRADE -and $env:HICLAW_DEFAULT_WORKER_RUNTIME) {
+        Write-Log (Get-Msg "prompt.upgrade_keep" -f "HICLAW_DEFAULT_WORKER_RUNTIME", $env:HICLAW_DEFAULT_WORKER_RUNTIME)
+        $rtChoice = Read-Host (Get-Msg "worker_runtime.choice")
+        if ($rtChoice) {
+            $config.DEFAULT_WORKER_RUNTIME = if ($rtChoice -eq "2") { "copaw" } else { "openclaw" }
+        } else {
+            $config.DEFAULT_WORKER_RUNTIME = $env:HICLAW_DEFAULT_WORKER_RUNTIME
+        }
+    } elseif ($env:HICLAW_DEFAULT_WORKER_RUNTIME) {
+        $config.DEFAULT_WORKER_RUNTIME = $env:HICLAW_DEFAULT_WORKER_RUNTIME
+    } else {
+        $rtChoice = Read-Host (Get-Msg "worker_runtime.choice")
+        $rtChoice = if ($rtChoice) { $rtChoice } else { "1" }
+        $config.DEFAULT_WORKER_RUNTIME = if ($rtChoice -eq "2") { "copaw" } else { "openclaw" }
+    }
+    Write-Log (Get-Msg "worker_runtime.selected" -f $config.DEFAULT_WORKER_RUNTIME)
+
     Write-Log ""
 
     # Generate secrets
@@ -1652,6 +1664,7 @@ function Install-Manager {
     $config.LANGUAGE = $script:HICLAW_LANGUAGE
     $config.REGISTRY = $script:HICLAW_REGISTRY
     $config.WORKER_IMAGE = $script:WORKER_IMAGE
+    $config.COPAW_WORKER_IMAGE = $script:COPAW_WORKER_IMAGE
 
     # Host share directory
     if (-not $script:HICLAW_NON_INTERACTIVE -and -not $script:HICLAW_QUICKSTART -and -not $env:HICLAW_HOST_SHARE_DIR) {
@@ -1682,9 +1695,28 @@ function Install-Manager {
     $dockerArgs += @("-e", "TZ=$($script:HICLAW_TIMEZONE)")
 
     # Docker socket mount (Windows uses named pipe)
+    # On Windows, we test socket availability by running docker commands
     if ($script:HICLAW_MOUNT_SOCKET) {
-        $dockerArgs += @("-v", "//var/run/docker.sock:/var/run/docker.sock")
-        Write-Log (Get-Msg "install.socket_detected" -f "//var/run/docker.sock")
+        $socketAvailable = Test-DockerRunning
+        if ($socketAvailable) {
+            $dockerArgs += @("-v", "//var/run/docker.sock:/var/run/docker.sock")
+            Write-Log (Get-Msg "install.socket_detected" -f "//var/run/docker.sock")
+        } else {
+            Write-Log (Get-Msg "install.socket_not_found")
+            # Interactive confirmation when socket not found
+            if (-not $script:HICLAW_NON_INTERACTIVE) {
+                Write-Host ""
+                Write-Host "`e[33m$(Get-Msg 'install.socket_confirm.title')`e[0m"
+                Write-Host ""
+                Write-Host (Get-Msg 'install.socket_confirm.message')
+                Write-Host ""
+                $confirm = Read-Host (Get-Msg 'install.socket_confirm.prompt')
+                if ($confirm -ne 'y' -and $confirm -ne 'Y') {
+                    Write-Log (Get-Msg 'install.socket_confirm.cancelled')
+                    exit 0
+                }
+            }
+        }
     }
 
     # Port mappings
@@ -1717,14 +1749,6 @@ function Install-Manager {
     # Image
     $dockerArgs += $script:MANAGER_IMAGE
 
-    # Remove existing container
-    $existingContainer = docker ps -a --format "{{.Names}}" 2>$null | Select-String "^hiclaw-manager$"
-    if ($existingContainer) {
-        Write-Log (Get-Msg "install.removing_existing")
-        docker stop hiclaw-manager *>$null
-        docker rm hiclaw-manager *>$null
-    }
-
     # Check if the Docker volume exists; create if not (reuse on reinstall)
     $volumeExists = docker volume ls -q 2>$null | Select-String "^$($config.DATA_DIR)$"
     if (-not $volumeExists) {
@@ -1748,17 +1772,39 @@ function Install-Manager {
         & docker pull $script:MANAGER_IMAGE
     }
 
-    if ($script:WORKER_IMAGE.StartsWith($LocalImagePrefix)) {
-        $workerImageExists = docker image inspect $script:WORKER_IMAGE 2>$null
+    # Pull only the worker image matching the selected runtime
+    $selectedWorkerImage = if ($config.DEFAULT_WORKER_RUNTIME -eq "copaw") { $script:COPAW_WORKER_IMAGE } else { $script:WORKER_IMAGE }
+    if ($selectedWorkerImage.StartsWith($LocalImagePrefix)) {
+        $workerImageExists = docker image inspect $selectedWorkerImage 2>$null
         if ($LASTEXITCODE -eq 0) {
-            Write-Log (Get-Msg "install.image.worker_exists" -f $script:WORKER_IMAGE)
+            Write-Log (Get-Msg "install.image.worker_exists" -f $selectedWorkerImage)
         } else {
-            Write-Log (Get-Msg "install.image.pulling_worker" -f $script:WORKER_IMAGE)
-            & docker pull $script:WORKER_IMAGE
+            Write-Log (Get-Msg "install.image.pulling_worker" -f $selectedWorkerImage)
+            & docker pull $selectedWorkerImage
         }
     } else {
-        Write-Log (Get-Msg "install.image.pulling_worker" -f $script:WORKER_IMAGE)
-        & docker pull $script:WORKER_IMAGE
+        Write-Log (Get-Msg "install.image.pulling_worker" -f $selectedWorkerImage)
+        & docker pull $selectedWorkerImage
+    }
+
+    # Stop and remove existing containers (deferred until after all
+    # configuration is collected and images are pulled successfully)
+    $existingContainer = docker ps -a --format "{{.Names}}" 2>$null | Select-String "^hiclaw-manager$"
+    if ($existingContainer) {
+        Write-Log (Get-Msg "install.removing_existing")
+        docker stop hiclaw-manager *>$null
+        docker rm hiclaw-manager *>$null
+    }
+
+    # Stop and remove worker containers saved during upgrade detection
+    # (Manager IP changes on restart, so workers must be recreated)
+    if ($script:UPGRADE_EXISTING_WORKERS) {
+        Write-Log (Get-Msg "install.existing.stopping_workers")
+        $script:UPGRADE_EXISTING_WORKERS | ForEach-Object {
+            docker stop $_ *>$null
+            docker rm $_ *>$null
+            Write-Log (Get-Msg "install.existing.removed" -f $_)
+        }
     }
 
     # Run container
@@ -1984,4 +2030,11 @@ switch ($Command) {
     "uninstall" {
         Uninstall-HiClaw
     }
+}
+
+# Stop transcript logging
+try {
+    Stop-Transcript -ErrorAction SilentlyContinue
+} catch {
+    # Ignore errors when stopping transcript
 }

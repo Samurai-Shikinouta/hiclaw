@@ -23,8 +23,9 @@
 #   HICLAW_WORKSPACE_DIR      Host directory for manager workspace (default: ~/hiclaw-manager)
 #   HICLAW_VERSION            Image tag            (default: latest)
 #   HICLAW_REGISTRY           Image registry       (default: auto-detected by timezone)
-#   HICLAW_INSTALL_MANAGER_IMAGE  Override manager image (e.g., local build)
-#   HICLAW_INSTALL_WORKER_IMAGE   Override worker image  (e.g., local build)
+#   HICLAW_INSTALL_MANAGER_IMAGE       Override manager image (e.g., local build)
+#   HICLAW_INSTALL_WORKER_IMAGE        Override worker image  (e.g., local build)
+#   HICLAW_INSTALL_COPAW_WORKER_IMAGE  Override copaw worker image (e.g., local build)
 #   HICLAW_PORT_GATEWAY       Host port for Higress gateway (default: 18080)
 #   HICLAW_PORT_CONSOLE       Host port for Higress console (default: 18001)
 #   HICLAW_PORT_ELEMENT_WEB   Host port for Element Web direct access (default: 18088)
@@ -34,6 +35,25 @@ set -e
 HICLAW_VERSION="${HICLAW_VERSION:-latest}"
 HICLAW_NON_INTERACTIVE="${HICLAW_NON_INTERACTIVE:-0}"
 HICLAW_MOUNT_SOCKET="${HICLAW_MOUNT_SOCKET:-1}"
+
+# ============================================================
+# Log all output to file
+# ============================================================
+
+HICLAW_LOG_FILE="${HOME}/hiclaw-install.log"
+
+# Redirect all output (stdout and stderr) to both terminal and log file
+exec > >(tee -a "${HICLAW_LOG_FILE}") 2>&1
+
+echo ""
+echo "========================================"
+echo "HiClaw Installation Log"
+echo "Started: $(date)"
+echo "User: $(whoami)"
+echo "System: $(uname -a)"
+echo "Log file: ${HICLAW_LOG_FILE}"
+echo "========================================"
+echo ""
 
 # ============================================================
 # Utility functions (needed early for timezone detection)
@@ -80,7 +100,7 @@ detect_timezone() {
             tz="Asia/Shanghai"
             log "Using default timezone: ${tz}"
         else
-            read -p "Timezone [Asia/Shanghai]: " tz
+            read -e -p "Timezone [Asia/Shanghai]: " tz
             tz="${tz:-Asia/Shanghai}"
         fi
     fi
@@ -304,8 +324,8 @@ msg() {
         "llm.provider.selected_qwen.en") text="  Provider: Alibaba Cloud Bailian" ;;
         "llm.provider.selected_openai.zh") text="  提供商: %s（OpenAI 兼容）" ;;
         "llm.provider.selected_openai.en") text="  Provider: %s (OpenAI-compatible)" ;;
-        "llm.provider.invalid.zh") text="无效选择，默认使用阿里云百炼 CodingPlan" ;;
-        "llm.provider.invalid.en") text="Invalid choice, defaulting to Alibaba Cloud Bailian CodingPlan" ;;
+        "llm.provider.invalid.zh") text="无效选择: %s（请输入 1 或 2）" ;;
+        "llm.provider.invalid.en") text="Invalid choice: %s (please enter 1 or 2)" ;;
         "llm.qwen.model_prompt.zh") text="默认模型 ID [qwen3.5-plus]" ;;
         "llm.qwen.model_prompt.en") text="Default Model ID [qwen3.5-plus]" ;;
         "llm.openai.base_url_prompt.zh") text="Base URL（例如 https://api.openai.com/v1）" ;;
@@ -395,6 +415,17 @@ msg() {
         "host_share.sharing.en") text="Sharing host directory: %s -> /host-share in container" ;;
         "host_share.not_exist.zh") text="警告: 主机目录 %s 不存在，跳过验证继续使用" ;;
         "host_share.not_exist.en") text="WARNING: Host directory %s does not exist, using without validation" ;;
+        # --- Default worker runtime ---
+        "worker_runtime.title.zh") text="--- 默认 Worker 运行时 ---" ;;
+        "worker_runtime.title.en") text="--- Default Worker Runtime ---" ;;
+        "worker_runtime.openclaw.zh") text="OpenClaw（Node.js 容器，~500MB 内存）" ;;
+        "worker_runtime.openclaw.en") text="OpenClaw (Node.js container, ~500MB RAM)" ;;
+        "worker_runtime.copaw.zh") text="CoPaw（Python 容器，~150MB 内存，默认关闭控制台，可跟 Manager 对话按需开启）" ;;
+        "worker_runtime.copaw.en") text="CoPaw (Python container, ~150MB RAM, console off by default, enable on demand via Manager)" ;;
+        "worker_runtime.choice.zh") text="请选择 [1/2]" ;;
+        "worker_runtime.choice.en") text="Enter choice [1/2]" ;;
+        "worker_runtime.selected.zh") text="默认 Worker 运行时: %s" ;;
+        "worker_runtime.selected.en") text="Default Worker runtime: %s" ;;
         # --- Secrets and config ---
         "install.generating_secrets.zh") text="正在生成密钥..." ;;
         "install.generating_secrets.en") text="Generating secrets..." ;;
@@ -403,8 +434,16 @@ msg() {
         # --- Container runtime socket ---
         "install.socket_detected.zh") text="容器运行时 socket: %s（已启用直接创建 Worker）" ;;
         "install.socket_detected.en") text="Container runtime socket: %s (direct Worker creation enabled)" ;;
-        "install.socket_not_found.zh") text="未找到容器运行时 socket（Worker 创建将输出命令）" ;;
-        "install.socket_not_found.en") text="No container runtime socket found (Worker creation will output commands)" ;;
+        "install.socket_not_found.zh") text="未找到容器运行时 socket（Manager 无法直接创建 Worker 容器，需要你手动执行 docker 命令创建）" ;;
+        "install.socket_not_found.en") text="No container runtime socket found (Manager cannot create Worker containers directly, you will need to create them manually using docker commands)" ;;
+        "install.socket_confirm.title.zh") text="⚠️ 未检测到容器运行时 Socket" ;;
+        "install.socket_confirm.title.en") text="⚠️ Container Runtime Socket Not Detected" ;;
+        "install.socket_confirm.message.zh") text="未找到 Docker/Podman socket，Manager 将无法自动创建 Worker 容器。\n你需要手动执行 docker run 命令来创建 Worker。\n\n是否继续安装？" ;;
+        "install.socket_confirm.message.en") text="Docker/Podman socket not found. Manager will not be able to create Worker containers automatically.\nYou will need to manually run docker commands to create Workers.\n\nContinue installation?" ;;
+        "install.socket_confirm.prompt.zh") text="继续安装? [y/N]: " ;;
+        "install.socket_confirm.prompt.en") text="Continue? [y/N]: " ;;
+        "install.socket_confirm.cancelled.zh") text="安装已取消。如需启用 Worker 自动创建，请确保 Docker/Podman 正在运行，然后重新运行安装脚本。" ;;
+        "install.socket_confirm.cancelled.en") text="Installation cancelled. To enable automatic Worker creation, ensure Docker/Podman is running and re-run the installer." ;;
         # --- Container management ---
         "install.removing_existing.zh") text="正在移除现有 hiclaw-manager 容器..." ;;
         "install.removing_existing.en") text="Removing existing hiclaw-manager container..." ;;
@@ -648,6 +687,7 @@ detect_registry() {
 HICLAW_REGISTRY="${HICLAW_REGISTRY:-$(detect_registry)}"
 MANAGER_IMAGE="${HICLAW_INSTALL_MANAGER_IMAGE:-${HICLAW_REGISTRY}/higress/hiclaw-manager:${HICLAW_VERSION}}"
 WORKER_IMAGE="${HICLAW_INSTALL_WORKER_IMAGE:-${HICLAW_REGISTRY}/higress/hiclaw-worker:${HICLAW_VERSION}}"
+COPAW_WORKER_IMAGE="${HICLAW_INSTALL_COPAW_WORKER_IMAGE:-${HICLAW_REGISTRY}/higress/hiclaw-copaw-worker:${HICLAW_VERSION}}"
 
 # ============================================================
 # Wait for Manager agent to be ready
@@ -867,10 +907,10 @@ prompt() {
             log "$(msg prompt.upgrade_keep "${var_name}" "${display_value}")"
             local new_value=""
             if [ "${is_secret}" = "true" ]; then
-                read -s -p "${prompt_text}: " new_value
+                read -s -e -p "${prompt_text}: " new_value
                 echo
             else
-                read -p "${prompt_text}: " new_value
+                read -e -p "${prompt_text}: " new_value
             fi
             if [ -n "${new_value}" ]; then
                 eval "export ${var_name}='${new_value}'"
@@ -900,10 +940,10 @@ prompt() {
 
     local value=""
     if [ "${is_secret}" = "true" ]; then
-        read -s -p "${prompt_text}: " value
+        read -s -e -p "${prompt_text}: " value
         echo
     else
-        read -p "${prompt_text}: " value
+        read -e -p "${prompt_text}: " value
     fi
 
     value="${value:-${default_value}}"
@@ -949,10 +989,10 @@ prompt_optional() {
             fi
             local new_value=""
             if [ "${is_secret}" = "true" ]; then
-                read -s -p "${prompt_text}: " new_value
+                read -s -e -p "${prompt_text}: " new_value
                 echo
             else
-                read -p "${prompt_text}: " new_value
+                read -e -p "${prompt_text}: " new_value
             fi
             if [ -n "${new_value}" ]; then
                 eval "export ${var_name}='${new_value}'"
@@ -971,10 +1011,10 @@ prompt_optional() {
 
     local value=""
     if [ "${is_secret}" = "true" ]; then
-        read -s -p "${prompt_text}: " value
+        read -s -e -p "${prompt_text}: " value
         echo
     else
-        read -p "${prompt_text}: " value
+        read -e -p "${prompt_text}: " value
     fi
 
     eval "export ${var_name}='${value}'"
@@ -1066,7 +1106,7 @@ install_manager() {
         echo "$(msg lang.option_zh)"
         echo "$(msg lang.option_en)"
         echo ""
-        read -p "$(msg lang.prompt) [${lang_default_choice}]: " LANG_CHOICE
+        read -e -p "$(msg lang.prompt) [${lang_default_choice}]: " LANG_CHOICE
         LANG_CHOICE="${LANG_CHOICE:-${lang_default_choice}}"
 
         case "${LANG_CHOICE}" in
@@ -1092,7 +1132,7 @@ install_manager() {
         echo "$(msg install.mode.quickstart)"
         echo "$(msg install.mode.manual)"
         echo ""
-        read -p "$(msg install.mode.prompt): " ONBOARDING_CHOICE
+        read -e -p "$(msg install.mode.prompt): " ONBOARDING_CHOICE
         ONBOARDING_CHOICE="${ONBOARDING_CHOICE:-1}"
 
         case "${ONBOARDING_CHOICE}" in
@@ -1143,7 +1183,7 @@ install_manager() {
             echo "$(msg install.existing.reinstall)"
             echo "$(msg install.existing.cancel)"
             echo ""
-            read -p "$(msg install.existing.prompt): " UPGRADE_CHOICE
+            read -e -p "$(msg install.existing.prompt): " UPGRADE_CHOICE
             UPGRADE_CHOICE="${UPGRADE_CHOICE:-1}"
         fi
 
@@ -1152,7 +1192,8 @@ install_manager() {
                 HICLAW_UPGRADE=1
                 log "$(msg install.existing.upgrading)"
 
-                # Warn about running containers
+                # Warn about running containers (actual stop is deferred until
+                # all configuration is collected and images are pulled)
                 if [ -n "${running_manager}" ] || [ -n "${running_workers}" ]; then
                     echo ""
                     echo -e "\033[33m$(msg install.existing.warn_manager_stop)\033[0m"
@@ -1161,7 +1202,7 @@ install_manager() {
                     fi
                     if [ "${HICLAW_NON_INTERACTIVE}" != "1" ]; then
                         echo ""
-                        read -p "$(msg install.existing.continue_prompt): " CONFIRM_STOP
+                        read -e -p "$(msg install.existing.continue_prompt): " CONFIRM_STOP
                         if [ "${CONFIRM_STOP}" != "y" ] && [ "${CONFIRM_STOP}" != "Y" ]; then
                             log "$(msg install.existing.cancelled)"
                             exit 0
@@ -1169,23 +1210,8 @@ install_manager() {
                     fi
                 fi
 
-                # Stop and remove manager container
-                if [ -n "${running_manager}" ] || ${DOCKER_CMD} ps -a --format '{{.Names}}' | grep -q "^hiclaw-manager$"; then
-                    log "$(msg install.existing.stopping_manager)"
-                    ${DOCKER_CMD} stop hiclaw-manager 2>/dev/null || true
-                    ${DOCKER_CMD} rm hiclaw-manager 2>/dev/null || true
-                fi
-
-                # Stop and remove worker containers (Manager IP changes on restart,
-                # so workers must be recreated to get updated /etc/hosts entries)
-                if [ -n "${existing_workers}" ]; then
-                    log "$(msg install.existing.stopping_workers)"
-                    for w in ${existing_workers}; do
-                        ${DOCKER_CMD} stop "${w}" 2>/dev/null || true
-                        ${DOCKER_CMD} rm "${w}" 2>/dev/null || true
-                        log "$(msg install.existing.removed "${w}")"
-                    done
-                fi
+                # Remember workers to stop later (after config + image pull)
+                UPGRADE_EXISTING_WORKERS="${existing_workers}"
                 # Continue with installation using existing config
                 ;;
             2|reinstall)
@@ -1217,7 +1243,7 @@ install_manager() {
                 echo -e "\033[31m$(msg install.reinstall.confirm_type)\033[0m"
                 echo -e "\033[31m  ${existing_workspace}\033[0m"
                 echo ""
-                read -p "$(msg install.reinstall.confirm_path): " CONFIRM_PATH
+                read -e -p "$(msg install.reinstall.confirm_path): " CONFIRM_PATH
 
                 if [ "${CONFIRM_PATH}" != "${existing_workspace}" ]; then
                     error "$(msg install.reinstall.path_mismatch "${CONFIRM_PATH}" "${existing_workspace}")"
@@ -1304,10 +1330,10 @@ install_manager() {
         echo "$(msg llm.provider.openai_compat)"
         echo ""
         if [ "${HICLAW_QUICKSTART}" = "1" ]; then
-            read -p "$(msg llm.provider.select) [1]: " PROVIDER_CHOICE
+            read -e -p "$(msg llm.provider.select) [1]: " PROVIDER_CHOICE
             PROVIDER_CHOICE="${PROVIDER_CHOICE:-1}"
         else
-            read -p "$(msg llm.provider.select): " PROVIDER_CHOICE
+            read -e -p "$(msg llm.provider.select): " PROVIDER_CHOICE
             PROVIDER_CHOICE="${PROVIDER_CHOICE:-1}"
         fi
 
@@ -1320,25 +1346,26 @@ install_manager() {
                 echo "$(msg llm.alibaba.model.qwen)"
                 echo ""
                 if [ "${HICLAW_QUICKSTART}" = "1" ]; then
-                    read -p "$(msg llm.alibaba.model.select) [1]: " ALIBABA_MODEL_CHOICE
+                    read -e -p "$(msg llm.alibaba.model.select) [1]: " ALIBABA_MODEL_CHOICE
                     ALIBABA_MODEL_CHOICE="${ALIBABA_MODEL_CHOICE:-1}"
                 else
-                    read -p "$(msg llm.alibaba.model.select): " ALIBABA_MODEL_CHOICE
+                    read -e -p "$(msg llm.alibaba.model.select): " ALIBABA_MODEL_CHOICE
                     ALIBABA_MODEL_CHOICE="${ALIBABA_MODEL_CHOICE:-1}"
                 fi
 
                 case "${ALIBABA_MODEL_CHOICE}" in
                     2|qwen)
                         HICLAW_LLM_PROVIDER="qwen"
+                        HICLAW_OPENAI_BASE_URL=""
                         echo ""
-                        read -p "$(msg llm.qwen.model_prompt): " HICLAW_DEFAULT_MODEL
+                        read -e -p "$(msg llm.qwen.model_prompt): " HICLAW_DEFAULT_MODEL
                         HICLAW_DEFAULT_MODEL="${HICLAW_DEFAULT_MODEL:-qwen3.5-plus}"
                         log "$(msg llm.provider.selected_qwen)"
                         log "$(msg llm.model.label "${HICLAW_DEFAULT_MODEL}")"
                         ;;
                     *)
                         HICLAW_LLM_PROVIDER="openai-compat"
-                        HICLAW_OPENAI_BASE_URL="${HICLAW_OPENAI_BASE_URL:-https://coding.dashscope.aliyuncs.com/v1}"
+                        HICLAW_OPENAI_BASE_URL="https://coding.dashscope.aliyuncs.com/v1"
 
                         # Sub-menu: Select CodingPlan model
                         echo ""
@@ -1349,10 +1376,10 @@ install_manager() {
                         echo "$(msg llm.codingplan.model.minimax)"
                         echo ""
                         if [ "${HICLAW_QUICKSTART}" = "1" ]; then
-                            read -p "$(msg llm.codingplan.model.select) [1]: " CODINGPLAN_MODEL_CHOICE
+                            read -e -p "$(msg llm.codingplan.model.select) [1]: " CODINGPLAN_MODEL_CHOICE
                             CODINGPLAN_MODEL_CHOICE="${CODINGPLAN_MODEL_CHOICE:-1}"
                         else
-                            read -p "$(msg llm.codingplan.model.select): " CODINGPLAN_MODEL_CHOICE
+                            read -e -p "$(msg llm.codingplan.model.select): " CODINGPLAN_MODEL_CHOICE
                             CODINGPLAN_MODEL_CHOICE="${CODINGPLAN_MODEL_CHOICE:-1}"
                         fi
 
@@ -1394,8 +1421,8 @@ install_manager() {
                 HICLAW_LLM_PROVIDER="openai-compat"
                 log "$(msg llm.provider.selected_openai "${HICLAW_LLM_PROVIDER}")"
                 echo ""
-                read -p "$(msg llm.openai.base_url_prompt): " HICLAW_OPENAI_BASE_URL
-                read -p "$(msg llm.openai.model_prompt): " HICLAW_DEFAULT_MODEL
+                read -e -p "$(msg llm.openai.base_url_prompt): " HICLAW_OPENAI_BASE_URL
+                read -e -p "$(msg llm.openai.model_prompt): " HICLAW_DEFAULT_MODEL
                 HICLAW_DEFAULT_MODEL="${HICLAW_DEFAULT_MODEL:-gpt-5.4}"
                 log "$(msg llm.openai.base_url_label "${HICLAW_OPENAI_BASE_URL}")"
                 log "$(msg llm.model.label "${HICLAW_DEFAULT_MODEL}")"
@@ -1404,52 +1431,7 @@ install_manager() {
                 test_llm_connectivity "${HICLAW_OPENAI_BASE_URL}" "${HICLAW_LLM_API_KEY}" "${HICLAW_DEFAULT_MODEL}"
                 ;;
             *)
-                log "$(msg llm.provider.invalid)"
-                HICLAW_LLM_PROVIDER="openai-compat"
-                HICLAW_OPENAI_BASE_URL="${HICLAW_OPENAI_BASE_URL:-https://coding.dashscope.aliyuncs.com/v1}"
-
-                # Sub-menu: Select CodingPlan model
-                echo ""
-                echo "$(msg llm.codingplan.models_title)"
-                echo "$(msg llm.codingplan.model.qwen35plus)"
-                echo "$(msg llm.codingplan.model.glm5)"
-                echo "$(msg llm.codingplan.model.kimi)"
-                echo "$(msg llm.codingplan.model.minimax)"
-                echo ""
-                if [ "${HICLAW_QUICKSTART}" = "1" ]; then
-                    read -p "$(msg llm.codingplan.model.select) [1]: " CODINGPLAN_MODEL_CHOICE
-                    CODINGPLAN_MODEL_CHOICE="${CODINGPLAN_MODEL_CHOICE:-1}"
-                else
-                    read -p "$(msg llm.codingplan.model.select): " CODINGPLAN_MODEL_CHOICE
-                    CODINGPLAN_MODEL_CHOICE="${CODINGPLAN_MODEL_CHOICE:-1}"
-                fi
-
-                case "${CODINGPLAN_MODEL_CHOICE}" in
-                    1|qwen3.5-plus)
-                        HICLAW_DEFAULT_MODEL="qwen3.5-plus"
-                        ;;
-                    2|glm-5)
-                        HICLAW_DEFAULT_MODEL="glm-5"
-                        ;;
-                    3|kimi-k2.5)
-                        HICLAW_DEFAULT_MODEL="kimi-k2.5"
-                        ;;
-                    4|MiniMax-M2.5)
-                        HICLAW_DEFAULT_MODEL="MiniMax-M2.5"
-                        ;;
-                    *)
-                        HICLAW_DEFAULT_MODEL="qwen3.5-plus"
-                        ;;
-                esac
-
-                log "$(msg llm.provider.selected_codingplan)"
-                log "$(msg llm.model.label "${HICLAW_DEFAULT_MODEL}")"
-                log ""
-                log "$(msg llm.apikey_hint)"
-                log "$(msg llm.apikey_url)"
-                log ""
-                prompt HICLAW_LLM_API_KEY "$(msg llm.apikey_prompt)" "" "true"
-                test_llm_connectivity "${HICLAW_OPENAI_BASE_URL}" "${HICLAW_LLM_API_KEY}" "${HICLAW_DEFAULT_MODEL}" "$(msg llm.openai.test.fail.codingplan)"
+                error "$(msg llm.provider.invalid "${PROVIDER_CHOICE}")"
                 ;;
         esac
     fi
@@ -1485,7 +1467,7 @@ install_manager() {
     if [ "${HICLAW_NON_INTERACTIVE}" = "1" ]; then
         HICLAW_LOCAL_ONLY="${HICLAW_LOCAL_ONLY:-1}"
     elif [ -z "${HICLAW_LOCAL_ONLY+x}" ]; then
-        read -p "$(msg port.local_only.choice): " _local_choice
+        read -e -p "$(msg port.local_only.choice): " _local_choice
         _local_choice="${_local_choice:-1}"
         case "${_local_choice}" in
             2|n|N|no|NO) HICLAW_LOCAL_ONLY="0" ;;
@@ -1533,7 +1515,7 @@ install_manager() {
     # Data persistence
     log "$(msg data.title)"
     if [ "${HICLAW_NON_INTERACTIVE}" != "1" ] && [ "${HICLAW_QUICKSTART}" != "1" ] && [ -z "${HICLAW_DATA_DIR+x}" ]; then
-        read -p "$(msg data.volume_prompt): " HICLAW_DATA_DIR
+        read -e -p "$(msg data.volume_prompt): " HICLAW_DATA_DIR
         HICLAW_DATA_DIR="${HICLAW_DATA_DIR:-hiclaw-data}"
         export HICLAW_DATA_DIR
     fi
@@ -1543,7 +1525,7 @@ install_manager() {
     # Manager workspace directory (skills, memory, state — host-editable)
     log "$(msg workspace.title)"
     if [ "${HICLAW_NON_INTERACTIVE}" != "1" ] && [ "${HICLAW_QUICKSTART}" != "1" ] && [ -z "${HICLAW_WORKSPACE_DIR+x}" ]; then
-        read -p "$(msg workspace.dir_prompt "${HOME}/hiclaw-manager"): " HICLAW_WORKSPACE_DIR
+        read -e -p "$(msg workspace.dir_prompt "${HOME}/hiclaw-manager"): " HICLAW_WORKSPACE_DIR
         HICLAW_WORKSPACE_DIR="${HICLAW_WORKSPACE_DIR:-${HOME}/hiclaw-manager}"
         export HICLAW_WORKSPACE_DIR
     elif [ -z "${HICLAW_WORKSPACE_DIR+x}" ]; then
@@ -1553,6 +1535,36 @@ install_manager() {
     HICLAW_WORKSPACE_DIR="$(cd "${HICLAW_WORKSPACE_DIR}" 2>/dev/null && pwd || echo "${HICLAW_WORKSPACE_DIR}")"
     mkdir -p "${HICLAW_WORKSPACE_DIR}"
     log "$(msg workspace.dir_label "${HICLAW_WORKSPACE_DIR}")"
+
+    # Default Worker Runtime
+    log "$(msg worker_runtime.title)"
+    echo ""
+    echo "  1) $(msg worker_runtime.openclaw)"
+    echo "  2) $(msg worker_runtime.copaw)"
+    echo ""
+    if [ "${HICLAW_NON_INTERACTIVE}" = "1" ]; then
+        HICLAW_DEFAULT_WORKER_RUNTIME="${HICLAW_DEFAULT_WORKER_RUNTIME:-openclaw}"
+    elif [ "${HICLAW_UPGRADE}" = "1" ] && [ -n "${HICLAW_DEFAULT_WORKER_RUNTIME}" ]; then
+        log "$(msg prompt.upgrade_keep "HICLAW_DEFAULT_WORKER_RUNTIME" "${HICLAW_DEFAULT_WORKER_RUNTIME}")"
+        read -e -p "$(msg worker_runtime.choice): " _runtime_choice
+        if [ -n "${_runtime_choice}" ]; then
+            case "${_runtime_choice}" in
+                2) HICLAW_DEFAULT_WORKER_RUNTIME="copaw" ;;
+                *) HICLAW_DEFAULT_WORKER_RUNTIME="openclaw" ;;
+            esac
+        fi
+        unset _runtime_choice
+    elif [ -z "${HICLAW_DEFAULT_WORKER_RUNTIME+x}" ]; then
+        read -e -p "$(msg worker_runtime.choice): " _runtime_choice
+        _runtime_choice="${_runtime_choice:-1}"
+        case "${_runtime_choice}" in
+            2) HICLAW_DEFAULT_WORKER_RUNTIME="copaw" ;;
+            *) HICLAW_DEFAULT_WORKER_RUNTIME="openclaw" ;;
+        esac
+        unset _runtime_choice
+    fi
+    export HICLAW_DEFAULT_WORKER_RUNTIME
+    log "$(msg worker_runtime.selected "${HICLAW_DEFAULT_WORKER_RUNTIME}")"
 
     log ""
 
@@ -1611,8 +1623,12 @@ HICLAW_GITHUB_TOKEN=${HICLAW_GITHUB_TOKEN:-}
 # Skills Registry (optional, default: https://skills.sh)
 HICLAW_SKILLS_API_URL=${HICLAW_SKILLS_API_URL:-}
 
-# Worker image (for direct container creation)
+# Worker images (for direct container creation)
 HICLAW_WORKER_IMAGE=${WORKER_IMAGE}
+HICLAW_COPAW_WORKER_IMAGE=${COPAW_WORKER_IMAGE}
+
+# Default Worker runtime (openclaw | copaw)
+HICLAW_DEFAULT_WORKER_RUNTIME=${HICLAW_DEFAULT_WORKER_RUNTIME:-openclaw}
 
 # Higress WASM plugin image registry (auto-selected by timezone)
 HIGRESS_ADMIN_WASM_PLUGIN_IMAGE_REGISTRY=${HICLAW_REGISTRY}
@@ -1637,14 +1653,20 @@ EOF
             SOCKET_MOUNT_ARGS="-v ${CONTAINER_SOCK}:/var/run/docker.sock --security-opt label=disable"
         else
             log "$(msg install.socket_not_found)"
+            # Interactive confirmation when socket not found
+            if [ "${HICLAW_NON_INTERACTIVE}" != "1" ]; then
+                echo ""
+                echo -e "\033[33m$(msg install.socket_confirm.title)\033[0m"
+                echo ""
+                echo -e "$(msg install.socket_confirm.message)"
+                echo ""
+                read -p "$(msg install.socket_confirm.prompt)" SOCKET_CONFIRM
+                if [ "${SOCKET_CONFIRM}" != "y" ] && [ "${SOCKET_CONFIRM}" != "Y" ]; then
+                    log "$(msg install.socket_confirm.cancelled)"
+                    exit 0
+                fi
+            fi
         fi
-    fi
-
-    # Remove existing container if present
-    if ${DOCKER_CMD} ps -a --format '{{.Names}}' | grep -q "^hiclaw-manager$"; then
-        log "$(msg install.removing_existing)"
-        ${DOCKER_CMD} stop hiclaw-manager 2>/dev/null || true
-        ${DOCKER_CMD} rm hiclaw-manager 2>/dev/null || true
     fi
 
     # Create the data volume if it doesn't already exist (reuse on reinstall)
@@ -1663,7 +1685,7 @@ EOF
 
     # Host directory mount: for file sharing with agents (defaults to user's home)
     if [ "${HICLAW_NON_INTERACTIVE}" != "1" ] && [ -z "${HICLAW_HOST_SHARE_DIR}" ]; then
-        read -p "$(msg host_share.prompt "$HOME"): " HICLAW_HOST_SHARE_DIR
+        read -e -p "$(msg host_share.prompt "$HOME"): " HICLAW_HOST_SHARE_DIR
         HICLAW_HOST_SHARE_DIR="${HICLAW_HOST_SHARE_DIR:-$HOME}"
         export HICLAW_HOST_SHARE_DIR
     elif [ -z "${HICLAW_HOST_SHARE_DIR}" ]; then
@@ -1686,29 +1708,50 @@ EOF
         log "$(msg install.yolo)"
     fi
 
-    # Pull images (worker image must be ready before manager creates workers)
+    # Pull images (only pull the worker image matching the selected runtime)
     LOCAL_IMAGE_PREFIX="hiclaw/"
-    if echo "${MANAGER_IMAGE}" | grep -q "^${LOCAL_IMAGE_PREFIX}"; then
-        if ${DOCKER_CMD} image inspect "${MANAGER_IMAGE}" >/dev/null 2>&1; then
-            log "$(msg install.image.exists "${MANAGER_IMAGE}")"
-        else
-            log "$(msg install.image.pulling_manager "${MANAGER_IMAGE}")"
-            ${DOCKER_CMD} pull "${MANAGER_IMAGE}"
+
+    # Helper: pull or skip a single image
+    # Args: $1=image  $2=exists_msg_key  $3=pulling_msg_key
+    _pull_image() {
+        local _img="$1" _exists_key="$2" _pull_key="$3"
+        if echo "${_img}" | grep -q "^${LOCAL_IMAGE_PREFIX}"; then
+            if ${DOCKER_CMD} image inspect "${_img}" >/dev/null 2>&1; then
+                log "$(msg "${_exists_key}" "${_img}")"
+                return 0
+            fi
         fi
+        log "$(msg "${_pull_key}" "${_img}")"
+        ${DOCKER_CMD} pull "${_img}"
+    }
+
+    # Manager image is always required
+    _pull_image "${MANAGER_IMAGE}" "install.image.exists" "install.image.pulling_manager"
+
+    # Pull only the worker image for the selected runtime
+    if [ "${HICLAW_DEFAULT_WORKER_RUNTIME}" = "copaw" ]; then
+        _pull_image "${COPAW_WORKER_IMAGE}" "install.image.worker_exists" "install.image.pulling_worker"
     else
-        log "$(msg install.image.pulling_manager "${MANAGER_IMAGE}")"
-        ${DOCKER_CMD} pull "${MANAGER_IMAGE}"
+        _pull_image "${WORKER_IMAGE}" "install.image.worker_exists" "install.image.pulling_worker"
     fi
-    if echo "${WORKER_IMAGE}" | grep -q "^${LOCAL_IMAGE_PREFIX}"; then
-        if ${DOCKER_CMD} image inspect "${WORKER_IMAGE}" >/dev/null 2>&1; then
-            log "$(msg install.image.worker_exists "${WORKER_IMAGE}")"
-        else
-            log "$(msg install.image.pulling_worker "${WORKER_IMAGE}")"
-            ${DOCKER_CMD} pull "${WORKER_IMAGE}"
-        fi
-    else
-        log "$(msg install.image.pulling_worker "${WORKER_IMAGE}")"
-        ${DOCKER_CMD} pull "${WORKER_IMAGE}"
+
+    # Stop and remove existing containers (deferred from upgrade detection
+    # so that all configuration is collected and images are pulled first)
+    if ${DOCKER_CMD} ps -a --format '{{.Names}}' | grep -q "^hiclaw-manager$"; then
+        log "$(msg install.removing_existing)"
+        ${DOCKER_CMD} stop hiclaw-manager 2>/dev/null || true
+        ${DOCKER_CMD} rm hiclaw-manager 2>/dev/null || true
+    fi
+
+    # Stop and remove worker containers saved during upgrade detection
+    # (Manager IP changes on restart, so workers must be recreated)
+    if [ -n "${UPGRADE_EXISTING_WORKERS:-}" ]; then
+        log "$(msg install.existing.stopping_workers)"
+        for w in ${UPGRADE_EXISTING_WORKERS}; do
+            ${DOCKER_CMD} stop "${w}" 2>/dev/null || true
+            ${DOCKER_CMD} rm "${w}" 2>/dev/null || true
+            log "$(msg install.existing.removed "${w}")"
+        done
     fi
 
     # Run Manager container
@@ -1924,7 +1967,7 @@ test_llm_connectivity() {
         fi
         if [ "${HICLAW_NON_INTERACTIVE}" != "1" ]; then
             local _confirm
-            read -p "$(msg llm.openai.test.confirm)" _confirm
+            read -e -p "$(msg llm.openai.test.confirm)" _confirm
             if [ "${_confirm}" != "y" ] && [ "${_confirm}" != "Y" ]; then
                 log "$(msg llm.openai.test.aborted)"
                 exit 1
